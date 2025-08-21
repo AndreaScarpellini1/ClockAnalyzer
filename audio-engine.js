@@ -61,8 +61,8 @@ export class AudioEngine {
 
         this.workletNode = new AudioWorkletNode(this.ac, 'tick-processor');
         this.workletNode.port.onmessage = (e)=>{
-          const t = e?.data?.t;
-          if (typeof t === 'number') this.onTick(t);
+          const data = e?.data;
+          if (data && typeof data.t === 'number') this.onTick(data);
         };
         usingWorklet = true;
       } catch (err) {
