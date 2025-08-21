@@ -1,33 +1,30 @@
-// app.js
-// -----------------------------------------------------------------------------
-// Frontend only: wires the UI to the AudioEngine, keeps tick history,
-// computes statistics, and renders the charts.
-// -----------------------------------------------------------------------------
-
+// Frontend: UI + stats + charts (seconds-counting mode)
 import { AudioEngine } from './audio-engine.js';
 
-// ====== DOM refs ======
-const startBtn   = document.getElementById('startBtn');
-const stopBtn    = document.getElementById('stopBtn');
-const avgHzEl   = document.getElementById('avgHz');
-const stdHzEl   = document.getElementById('stdHz');
-const rateMinEl = document.getElementById('rateMinDay');
-const histCv    = document.getElementById('hist');
-const intervalsCv = document.getElementById('intervals');
-const hpEl       = document.getElementById('hp');
-const lpEl       = document.getElementById('lp');
-const targetEl   = document.getElementById('targetPeriod');
-const hctx = histCv.getContext('2d');
-const ictx = intervalsCv.getContext('2d');
+// DOM refs
+const startBtn     = document.getElementById('startBtn');
+const stopBtn      = document.getElementById('stopBtn');
+const clickTypeEl  = document.getElementById('clickType');
+const avgHzEl      = document.getElementById('avgHz');
+const stdHzEl      = document.getElementById('stdHz');
+const rateMinEl    = document.getElementById('rateMinDay');
+const histCv       = document.getElementById('hist');
+const intervalsCv  = document.getElementById('intervals');
+const hpEl         = document.getElementById('hp');
+const lpEl         = document.getElementById('lp');
+const hctx         = histCv.getContext('2d');
+const ictx         = intervalsCv.getContext('2d');
 
-// ====== State ======
+// State
 let tickTimes = []; // absolute seconds
-let intervals = []; // seconds (differences of tickTimes)
+let intervals = []; // seconds between consecutive clicks
 const MAX_TICKS = 10000;
 
-// ====== Drawing ======
+// Utils
+function mean(arr){ if(!arr.length) return NaN; return arr.reduce((a,b)=>a+b,0)/arr.length; }
+function stddev(arr){ if(arr.length<2) return 0; const m=mean(arr); return Math.sqrt(arr.reduce((s,x)=>s+(x-m)*(x-m),0)/(arr.length-1)); }
 
-// Draw frequency histogram (Hz)
+// Histogram (Hz) — seconds-counting
 function drawHistogram(freqs){
   const w = histCv.clientWidth, h = histCv.clientHeight;
   if (histCv.width !== w) histCv.width = w;
@@ -42,7 +39,6 @@ function drawHistogram(freqs){
   const bins = Math.min(40, Math.max(15, Math.floor(Math.sqrt(freqs.length))));
   const counts = new Array(bins).fill(0);
   const step = (hi - lo) / bins;
-
   for (const f of freqs){
     const idx = Math.min(bins-1, Math.max(0, Math.floor((f - lo) / step)));
     counts[idx]++;
@@ -80,7 +76,7 @@ function drawHistogram(freqs){
   }
 }
 
-// Draw intervals with axes: time (s) on x, Δt (s) on y
+// Intervals plot (time s vs Δt s) — shows raw click intervals
 function drawIntervals(){
   const w = intervalsCv.clientWidth, h = intervalsCv.clientHeight;
   if (intervalsCv.width !== w) intervalsCv.width = w;
@@ -112,10 +108,8 @@ function drawIntervals(){
   ictx.fillStyle = 'rgba(229,231,235,0.85)';
   ictx.font = '12px system-ui';
   ictx.fillText('time (s)', w - 80, h - 6);
-  ictx.save();
-  ictx.translate(12, h/2); ictx.rotate(-Math.PI/2);
-  ictx.fillText('Δt (s)', 0, 0);
-  ictx.restore();
+  ictx.save(); ictx.translate(12, h/2); ictx.rotate(-Math.PI/2);
+  ictx.fillText('Δt (s)', 0, 0); ictx.restore();
 
   // Scales
   const xTicks = 5;
@@ -132,18 +126,15 @@ function drawIntervals(){
     ictx.fillText(v.toFixed(3), 6, y+4);
   }
 
-  // Polyline of points
+  // Polyline + points
   ictx.beginPath();
   for (let i=0;i<xs.length;i++){
     const x = left + (xMax - xMin ? (xs[i]-xMin)/(xMax-xMin) * plotW : 0);
     const y = h - bottom - (y1 - y0 ? (ys[i]-y0)/(y1 - y0) * plotH : 0);
     if (i===0) ictx.moveTo(x,y); else ictx.lineTo(x,y);
   }
-  ictx.strokeStyle = 'rgba(34, 211, 238, 0.9)';
-  ictx.lineWidth = 1.5;
-  ictx.stroke();
+  ictx.strokeStyle = 'rgba(34, 211, 238, 0.9)'; ictx.lineWidth = 1.5; ictx.stroke();
 
-  // Points
   ictx.fillStyle = 'rgba(34, 211, 238, 0.9)';
   for (let i=0;i<xs.length;i++){
     const x = left + (xMax - xMin ? (xs[i]-xMin)/(xMax-xMin) * plotW : 0);
@@ -152,13 +143,10 @@ function drawIntervals(){
   }
 }
 
-// ====== Stats ======
-function mean(arr){ if(!arr.length) return NaN; return arr.reduce((a,b)=>a+b,0)/arr.length; }
-function stddev(arr){ if(arr.length<2) return 0; const m=mean(arr); return Math.sqrt(arr.reduce((s,x)=>s+(x-m)*(x-m),0)/(arr.length-1)); }
-
-let lastFreqs = [];
+let lastFreqs = []; // for redraws
 
 function updateStats(){
+  // Need a few ticks before showing stats
   if (tickTimes.length < 6) {
     avgHzEl.textContent  = 'Avg: — Hz';
     stdHzEl.textContent  = 'SD: — Hz';
@@ -169,54 +157,75 @@ function updateStats(){
     return;
   }
 
-  // intervals in seconds
+  // Raw click intervals (s) and click-based Hz
   intervals = tickTimes.slice(1).map((t,i)=> (t - tickTimes[i]));
-  const freqs = intervals.map(dt => dt>0 ? 1/dt : NaN).filter(x=>isFinite(x));
-  lastFreqs = freqs;
+  const freqsClick = intervals.map(dt => dt>0 ? 1/dt : NaN).filter(x=>isFinite(x));
 
-  const avg = mean(freqs);
-  const sd  = stddev(freqs);
-  avgHzEl.textContent = 'Avg: ' + (isFinite(avg) ? avg.toFixed(3) : '—') + ' Hz';
-  stdHzEl.textContent = 'SD: '  + (isFinite(sd) ? sd.toFixed(3) : '—') + ' Hz';
+  // Convert to SECONDS-COUNTING frequency using clickType (k = clicks per cycle)
+  const k = parseInt(clickTypeEl.value || '2', 10);  // 2 for pendulum, 1 for single-click
+  const freqsSec = freqsClick.map(f => f / k);
 
-  const target = parseFloat(targetEl.value || '1'); // seconds / tick
-  const fTarget = 1/target;
-  const minPerDay = isFinite(avg) && fTarget>0 ? 1440 * (avg / fTarget - 1) : NaN;
-  if (isFinite(minPerDay)){
+  // Histogram + global stats in seconds-counting Hz
+  lastFreqs = freqsSec;
+  const avgAll = mean(freqsSec);
+  const sdAll  = stddev(freqsSec);
+  avgHzEl.textContent = 'Avg: ' + (isFinite(avgAll) ? avgAll.toFixed(3) : '—') + ' Hz';
+  stdHzEl.textContent = 'SD: '  + (isFinite(sdAll) ? sdAll.toFixed(3) : '—') + ' Hz';
+
+  // Windowed average over the LAST 10 SECONDS (seconds-counting)
+  const lastT = tickTimes[tickTimes.length - 1];
+  const tStart = lastT - 10;
+  let i0 = tickTimes.length - 1;
+  while (i0 > 0 && tickTimes[i0 - 1] >= tStart) i0--;
+  const i1 = tickTimes.length - 1;
+
+  let avgHzWinSec = NaN;
+  if (i1 - i0 >= 1) {
+    const duration = tickTimes[i1] - tickTimes[i0];
+    if (duration > 0) {
+      const nIntervals = (i1 - i0);           // number of clicks in window minus 1
+      const avgHzClick = nIntervals / duration; // Hz in clicks
+      avgHzWinSec = avgHzClick / k;             // convert to seconds-counting Hz
+    }
+  }
+
+  // Convert to min/day vs 1 Hz (seconds-counting target)
+  const fTarget = 1.0;
+  const minPerDay = (isFinite(avgHzWinSec))
+    ? 1440 * (avgHzWinSec / fTarget - 1)
+    : NaN;
+
+  if (isFinite(minPerDay)) {
     const label = minPerDay >= 0 ? 'anticipation' : 'retard';
-    rateMinEl.textContent = `${minPerDay>=0?'+':''}${minPerDay.toFixed(2)} min/day (${label})`;
+    rateMinEl.textContent = `${minPerDay>=0?'+':''}${minPerDay.toFixed(2)} min/day (${label}, last 10 s)`;
   } else {
     rateMinEl.textContent = '—';
   }
 
-  drawHistogram(freqs);
+  // Draw
+  drawHistogram(freqsSec);
   drawIntervals();
 }
 
-// When the backend detects a tick, update history & stats
+// Tick callback from backend
 function onTick(t){
   const last = tickTimes.length ? tickTimes[tickTimes.length-1] : -1e9;
-  if (t - last > 0.2) { // simple debounce (>200 ms)
+  if (t - last > 0.2) { // debounce >200 ms
     tickTimes.push(t);
     if (tickTimes.length > MAX_TICKS) tickTimes = tickTimes.slice(-MAX_TICKS);
     updateStats();
   }
 }
 
-// ====== Backend instance ======
+// Backend
 const engine = new AudioEngine({ onTick });
 
-// ====== UI Wiring ======
-
-// Start: request mic, spin up audio engine
+// UI wiring
 startBtn.addEventListener('click', async ()=>{
   startBtn.disabled = true; stopBtn.disabled = false;
-
-  // FYI: on file:// many browsers block worklets; use http(s)/localhost for best results.
   if (!window.isSecureContext && location.hostname !== 'localhost') {
-    alert('Tip: serve this over HTTPS or http://localhost for full functionality.');
+    alert('Tip: serve over HTTPS or http://localhost for full functionality.');
   }
-
   try {
     await engine.start({ hpHz: parseFloat(hpEl.value || '800'),
                          lpHz: parseFloat(lpEl.value || '5000') });
@@ -227,22 +236,21 @@ startBtn.addEventListener('click', async ()=>{
   }
 });
 
-// Stop: tear everything down AND clear all data
 stopBtn.addEventListener('click', async ()=>{
-  try { await engine.stop(); } catch(e) { /* ignore */ }
+  try { await engine.stop(); } catch(e) { }
   startBtn.disabled = false; stopBtn.disabled = true;
   tickTimes = []; intervals = []; updateStats();
 });
 
-// Live-update filters: send new cutoffs to the backend
+// Live filter changes
 hpEl.addEventListener('input', ()=> engine.setHP(parseFloat(hpEl.value)));
 lpEl.addEventListener('input', ()=> engine.setLP(parseFloat(lpEl.value)));
 hpEl.addEventListener('change',()=> engine.setHP(parseFloat(hpEl.value)));
 lpEl.addEventListener('change',()=> engine.setLP(parseFloat(lpEl.value)));
 
-// Changing target period only affects stats
-targetEl.addEventListener('input', updateStats);
+// React to click type changes immediately in stats
+clickTypeEl.addEventListener('change', updateStats);
 
-// Resize-aware redraw
+// Resize redraws
 new ResizeObserver(()=>{ drawHistogram(lastFreqs); drawIntervals(); }).observe(histCv);
 new ResizeObserver(()=>{ drawHistogram(lastFreqs); drawIntervals(); }).observe(intervalsCv);
