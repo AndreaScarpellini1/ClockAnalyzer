@@ -15,6 +15,20 @@ const lpEl         = document.getElementById('lp');
 const hctx         = histCv.getContext('2d');
 const ictx         = intervalsCv.getContext('2d');
 
+// NEW: window length control (5,10,20,30 s)
+const WINDOW_OPTIONS = [5, 10, 20, 30];
+const winSlider = document.getElementById('winSlider');
+const winLabel  = document.getElementById('winLabel');
+function getWindowSeconds(){
+  const idx = Math.min(WINDOW_OPTIONS.length-1, Math.max(0, parseInt(winSlider.value || '0', 10)));
+  return WINDOW_OPTIONS[idx];
+}
+winSlider.addEventListener('input', ()=>{
+  winLabel.textContent = getWindowSeconds() + ' s';
+  updateStats();
+});
+winLabel.textContent = getWindowSeconds() + ' s'; // initial
+
 // State
 let tickTimes = []; // absolute seconds
 let intervals = []; // seconds between consecutive clicks
@@ -172,9 +186,10 @@ function updateStats(){
   avgHzEl.textContent = 'Avg: ' + (isFinite(avgAll) ? avgAll.toFixed(3) : '—') + ' Hz';
   stdHzEl.textContent = 'SD: '  + (isFinite(sdAll) ? sdAll.toFixed(3) : '—') + ' Hz';
 
-  // Windowed average over the LAST 10 SECONDS (seconds-counting)
+  // Windowed average over the LAST N SECONDS (seconds-counting)
   const lastT = tickTimes[tickTimes.length - 1];
-  const tStart = lastT - 10;
+  const winSec = getWindowSeconds();
+  const tStart = lastT - winSec;
   let i0 = tickTimes.length - 1;
   while (i0 > 0 && tickTimes[i0 - 1] >= tStart) i0--;
   const i1 = tickTimes.length - 1;
@@ -183,9 +198,9 @@ function updateStats(){
   if (i1 - i0 >= 1) {
     const duration = tickTimes[i1] - tickTimes[i0];
     if (duration > 0) {
-      const nIntervals = (i1 - i0);           // number of clicks in window minus 1
-      const avgHzClick = nIntervals / duration; // Hz in clicks
-      avgHzWinSec = avgHzClick / k;             // convert to seconds-counting Hz
+      const nIntervals = (i1 - i0);        // number of click intervals in window
+      const avgHzClick = nIntervals / duration; // clicks per second
+      avgHzWinSec = avgHzClick / k;        // convert to seconds-counting Hz
     }
   }
 
@@ -197,7 +212,7 @@ function updateStats(){
 
   if (isFinite(minPerDay)) {
     const label = minPerDay >= 0 ? 'anticipation' : 'retard';
-    rateMinEl.textContent = `${minPerDay>=0?'+':''}${minPerDay.toFixed(2)} min/day (${label}, last 10 s)`;
+    rateMinEl.textContent = `${minPerDay>=0?'+':''}${minPerDay.toFixed(2)} min/day (${label}, ${winSec}s window)`;
   } else {
     rateMinEl.textContent = '—';
   }

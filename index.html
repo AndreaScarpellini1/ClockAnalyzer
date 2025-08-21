@@ -13,14 +13,14 @@
       <p class="sub">Capture mic audio, detect ticks, and show seconds-counting frequency (Hz) + min/day deviation.</p>
 
       <div class="controls">
-        <!-- Replaces "Target beat period" -->
+        <!-- Click type: defines clicks-per-cycle, used to convert click-Hz to second-Hz -->
         <label>Click type
           <select id="clickType">
             <option value="2">Pendulum — 2 clicks per cycle (left + right)</option>
             <option value="1">Single-click clock — 1 click per cycle</option>
           </select>
         </label>
-        <div class="hint">Histogram & delay use <b>seconds-counting</b> frequency (Hz). Set 2 clicks for pendulum escapements; 1 click for single-click clocks.</div>
+        <div class="hint">Histogram & delay use <b>seconds-counting</b> frequency (Hz). Choose 2 clicks for pendulums; 1 click for single-click clocks.</div>
 
         <div class="row">
           <label>High-pass (Hz)
@@ -29,6 +29,17 @@
           <label>Low-pass (Hz)
             <input id="lp" type="number" min="1000" step="100" value="5000" />
           </label>
+        </div>
+
+        <!-- NEW: window length slider for min/day calculation -->
+        <div class="row">
+          <label>Rate window (s)
+            <input id="winSlider" type="range" min="0" max="3" step="1" value="0" />
+          </label>
+          <span class="chip" id="winLabel">5 s</span>
+        </div>
+        <div class="marks">
+          <span>5</span><span>10</span><span>20</span><span>30 s</span>
         </div>
 
         <div class="row" style="gap:12px;margin:10px 0 18px">
