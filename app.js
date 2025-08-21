@@ -1,7 +1,7 @@
 // app.js
 // -----------------------------------------------------------------------------
 // Frontend only: wires the UI to the AudioEngine, keeps tick history,
-// computes statistics, and renders the tiny sparkline.
+// computes statistics, and renders the charts.
 // -----------------------------------------------------------------------------
 
 import { AudioEngine } from './audio-engine.js';
@@ -9,80 +9,191 @@ import { AudioEngine } from './audio-engine.js';
 // ====== DOM refs ======
 const startBtn   = document.getElementById('startBtn');
 const stopBtn    = document.getElementById('stopBtn');
-const periodOut  = document.getElementById('periodOut');
-const rateOut    = document.getElementById('rateOut');
-const beatOut    = document.getElementById('beatOut');
-const spark      = document.getElementById('spark');
+const avgHzEl   = document.getElementById('avgHz');
+const stdHzEl   = document.getElementById('stdHz');
+const rateMinEl = document.getElementById('rateMinDay');
+const histCv    = document.getElementById('hist');
+const intervalsCv = document.getElementById('intervals');
 const hpEl       = document.getElementById('hp');
 const lpEl       = document.getElementById('lp');
 const targetEl   = document.getElementById('targetPeriod');
-const ctx2d      = spark.getContext('2d');
+const hctx = histCv.getContext('2d');
+const ictx = intervalsCv.getContext('2d');
 
-// ====== App state ======
-let tickTimes = [];   // seconds (AudioContext time of each detected tick)
-let intervals = [];   // ms (differences of tickTimes)
-const MAX_TICKS = 1200;
+// ====== State ======
+let tickTimes = []; // absolute seconds
+let intervals = []; // seconds (differences of tickTimes)
+const MAX_TICKS = 10000;
 
-// ====== Helpers ======
-function median(arr){
-  if(!arr.length) return NaN;
-  const a = [...arr].sort((x,y)=>x-y);
-  const mid = Math.floor(a.length/2);
-  return a.length%2 ? a[mid] : (a[mid-1] + a[mid]) / 2;
+// ====== Drawing ======
+
+// Draw frequency histogram (Hz)
+function drawHistogram(freqs){
+  const w = histCv.clientWidth, h = histCv.clientHeight;
+  if (histCv.width !== w) histCv.width = w;
+  if (histCv.height !== h) histCv.height = h;
+  hctx.clearRect(0,0,w,h);
+  if (!freqs || freqs.length < 5) return;
+
+  const minF = Math.min(...freqs), maxF = Math.max(...freqs);
+  const pad = (maxF - minF) * 0.05 || 0.01;
+  const lo = minF - pad, hi = maxF + pad;
+
+  const bins = Math.min(40, Math.max(15, Math.floor(Math.sqrt(freqs.length))));
+  const counts = new Array(bins).fill(0);
+  const step = (hi - lo) / bins;
+
+  for (const f of freqs){
+    const idx = Math.min(bins-1, Math.max(0, Math.floor((f - lo) / step)));
+    counts[idx]++;
+  }
+  const maxCount = Math.max(...counts) || 1;
+
+  // axes
+  hctx.strokeStyle = 'rgba(255,255,255,0.15)';
+  hctx.lineWidth = 1;
+  hctx.beginPath();
+  hctx.moveTo(40.5, 10.5); hctx.lineTo(40.5, h-30.5);
+  hctx.lineTo(w-10.5, h-30.5);
+  hctx.stroke();
+
+  // bars
+  const plotW = w - 55, plotH = h - 50;
+  const barW = plotW / bins;
+  for (let i=0;i<bins;i++){
+    const c = counts[i];
+    const barH = (c / maxCount) * plotH;
+    const x = 45 + i*barW + 2;
+    const y = h - 30 - barH;
+    hctx.fillStyle = 'rgba(34, 211, 238, 0.7)';
+    hctx.fillRect(x, y, Math.max(1, barW - 4), barH);
+  }
+
+  // x labels (Hz)
+  hctx.fillStyle = 'rgba(229,231,235,0.8)';
+  hctx.font = '12px system-ui';
+  const ticks = 5;
+  for(let i=0;i<=ticks;i++){
+    const f = lo + (i/ticks)*(hi-lo);
+    const x = 45 + (i/ticks)*plotW;
+    hctx.fillText(f.toFixed(3)+' Hz', x-18, h-12);
+  }
 }
 
-// Draw simple sparkline of most recent intervals
-function drawSpark(){
-  const w = spark.clientWidth, h = spark.clientHeight;
-  if (spark.width  !== w) spark.width  = w;
-  if (spark.height !== h) spark.height = h;
-  ctx2d.clearRect(0,0,w,h);
-
+// Draw intervals with axes: time (s) on x, Δt (s) on y
+function drawIntervals(){
+  const w = intervalsCv.clientWidth, h = intervalsCv.clientHeight;
+  if (intervalsCv.width !== w) intervalsCv.width = w;
+  if (intervalsCv.height !== h) intervalsCv.height = h;
+  ictx.clearRect(0,0,w,h);
   if (intervals.length < 2) return;
-  const recent = intervals.slice(-200);
-  const max = Math.max(...recent);
-  const min = Math.min(...recent);
-  const pad = 8;
 
-  ctx2d.beginPath();
-  recent.forEach((v,i)=>{
-    const x = pad + (i / (recent.length - 1)) * (w - 2*pad);
-    const y = h - pad - ((v - min) / (max - min + 1e-6)) * (h - 2*pad);
-    if (i === 0) ctx2d.moveTo(x,y); else ctx2d.lineTo(x,y);
-  });
-  ctx2d.strokeStyle = '#22d3ee';
-  ctx2d.lineWidth = 2;
-  ctx2d.stroke();
+  const t0 = tickTimes[0];
+  const xs = intervals.map((_,i)=> (tickTimes[i+1] - t0));
+  const ys = intervals; // seconds
+
+  const xMin = 0, xMax = Math.max(...xs);
+  const yMin = Math.min(...ys), yMax = Math.max(...ys);
+  const yPad = (yMax - yMin) * 0.1 || 0.05;
+
+  const left=46, bottom=28, top=10, right=10;
+  const plotW = w - left - right;
+  const plotH = h - top - bottom;
+
+  // Axes
+  ictx.strokeStyle = 'rgba(255,255,255,0.15)';
+  ictx.lineWidth = 1;
+  ictx.beginPath();
+  ictx.moveTo(left+0.5, top+0.5); ictx.lineTo(left+0.5, h-bottom+0.5);
+  ictx.lineTo(w-right+0.5, h-bottom+0.5);
+  ictx.stroke();
+
+  // Labels
+  ictx.fillStyle = 'rgba(229,231,235,0.85)';
+  ictx.font = '12px system-ui';
+  ictx.fillText('time (s)', w - 80, h - 6);
+  ictx.save();
+  ictx.translate(12, h/2); ictx.rotate(-Math.PI/2);
+  ictx.fillText('Δt (s)', 0, 0);
+  ictx.restore();
+
+  // Scales
+  const xTicks = 5;
+  for (let i=0;i<=xTicks;i++){
+    const t = xMin + (i/xTicks)*(xMax - xMin);
+    const x = left + (xMax - xMin ? (t - xMin)/(xMax - xMin) * plotW : 0);
+    ictx.fillText(t.toFixed(1), x-10, h-bottom+18);
+  }
+  const yTicks = 4;
+  const y0 = yMin - yPad, y1 = yMax + yPad;
+  for (let i=0;i<=yTicks;i++){
+    const v = y0 + (i/yTicks)*(y1 - y0);
+    const y = h - bottom - (y1 - y0 ? (v - y0)/(y1 - y0) * plotH : 0);
+    ictx.fillText(v.toFixed(3), 6, y+4);
+  }
+
+  // Polyline of points
+  ictx.beginPath();
+  for (let i=0;i<xs.length;i++){
+    const x = left + (xMax - xMin ? (xs[i]-xMin)/(xMax-xMin) * plotW : 0);
+    const y = h - bottom - (y1 - y0 ? (ys[i]-y0)/(y1 - y0) * plotH : 0);
+    if (i===0) ictx.moveTo(x,y); else ictx.lineTo(x,y);
+  }
+  ictx.strokeStyle = 'rgba(34, 211, 238, 0.9)';
+  ictx.lineWidth = 1.5;
+  ictx.stroke();
+
+  // Points
+  ictx.fillStyle = 'rgba(34, 211, 238, 0.9)';
+  for (let i=0;i<xs.length;i++){
+    const x = left + (xMax - xMin ? (xs[i]-xMin)/(xMax-xMin) * plotW : 0);
+    const y = h - bottom - (y1 - y0 ? (ys[i]-y0)/(y1 - y0) * plotH : 0);
+    ictx.beginPath(); ictx.arc(x,y,2,0,Math.PI*2); ictx.fill();
+  }
 }
 
-// Recompute stats whenever tickTimes or target changes
+// ====== Stats ======
+function mean(arr){ if(!arr.length) return NaN; return arr.reduce((a,b)=>a+b,0)/arr.length; }
+function stddev(arr){ if(arr.length<2) return 0; const m=mean(arr); return Math.sqrt(arr.reduce((s,x)=>s+(x-m)*(x-m),0)/(arr.length-1)); }
+
+let lastFreqs = [];
+
 function updateStats(){
   if (tickTimes.length < 6) {
-    periodOut.textContent = '—';
-    rateOut.textContent   = '—';
-    beatOut.textContent   = '—';
+    avgHzEl.textContent  = 'Avg: — Hz';
+    stdHzEl.textContent  = 'SD: — Hz';
+    rateMinEl.textContent = '—';
+    lastFreqs = [];
+    drawHistogram(lastFreqs);
+    ictx && ictx.clearRect(0,0,intervalsCv.width, intervalsCv.height);
     return;
   }
-  intervals = tickTimes.slice(1).map((t,i)=> (t - tickTimes[i]) * 1000);
-  const medMs = median(intervals);
+
+  // intervals in seconds
+  intervals = tickTimes.slice(1).map((t,i)=> (t - tickTimes[i]));
+  const freqs = intervals.map(dt => dt>0 ? 1/dt : NaN).filter(x=>isFinite(x));
+  lastFreqs = freqs;
+
+  const avg = mean(freqs);
+  const sd  = stddev(freqs);
+  avgHzEl.textContent = 'Avg: ' + (isFinite(avg) ? avg.toFixed(3) : '—') + ' Hz';
+  stdHzEl.textContent = 'SD: '  + (isFinite(sd) ? sd.toFixed(3) : '—') + ' Hz';
 
   const target = parseFloat(targetEl.value || '1'); // seconds / tick
-  const rateSecPerDay = ((medMs/1000 - target) / target) * 86400;
+  const fTarget = 1/target;
+  const minPerDay = isFinite(avg) && fTarget>0 ? 1440 * (avg / fTarget - 1) : NaN;
+  if (isFinite(minPerDay)){
+    const label = minPerDay >= 0 ? 'anticipation' : 'retard';
+    rateMinEl.textContent = `${minPerDay>=0?'+':''}${minPerDay.toFixed(2)} min/day (${label})`;
+  } else {
+    rateMinEl.textContent = '—';
+  }
 
-  // Beat error: difference between alternating intervals (tick vs tock)
-  const even = intervals.filter((_,i)=> i%2===0);
-  const odd  = intervals.filter((_,i)=> i%2===1);
-  const be = Math.abs(median(even) - median(odd)); // ms
-
-  periodOut.textContent = `${medMs.toFixed(2)} ms`;
-  const cls = rateSecPerDay > 0 ? 'bad' : 'good';
-  rateOut.innerHTML = `<span class="${cls}">${rateSecPerDay>=0?'+':''}${rateSecPerDay.toFixed(1)} s/day</span>`;
-  beatOut.textContent = isFinite(be) ? `${be.toFixed(1)} ms` : '—';
-
-  drawSpark();
+  drawHistogram(freqs);
+  drawIntervals();
 }
 
-// When the backend detects a tick, we update our history & stats
+// When the backend detects a tick, update history & stats
 function onTick(t){
   const last = tickTimes.length ? tickTimes[tickTimes.length-1] : -1e9;
   if (t - last > 0.2) { // simple debounce (>200 ms)
@@ -111,17 +222,16 @@ startBtn.addEventListener('click', async ()=>{
                          lpHz: parseFloat(lpEl.value || '5000') });
   } catch (err) {
     console.error(err);
-    alert('Audio setup failed: ' + (err?.message || err));
+    alert('Audio start failed: ' + (err?.message || err));
     startBtn.disabled = false; stopBtn.disabled = true;
   }
 });
 
-// Stop: tear everything down
+// Stop: tear everything down AND clear all data
 stopBtn.addEventListener('click', async ()=>{
-  stopBtn.disabled = true; startBtn.disabled = false;
-  try { await engine.stop(); } catch {}
-  // (Keep history/plot; if you want to clear: uncomment below)
-  // tickTimes = []; intervals = []; updateStats();
+  try { await engine.stop(); } catch(e) { /* ignore */ }
+  startBtn.disabled = false; stopBtn.disabled = true;
+  tickTimes = []; intervals = []; updateStats();
 });
 
 // Live-update filters: send new cutoffs to the backend
@@ -133,5 +243,6 @@ lpEl.addEventListener('change',()=> engine.setLP(parseFloat(lpEl.value)));
 // Changing target period only affects stats
 targetEl.addEventListener('input', updateStats);
 
-// Resize-aware sparkline
-new ResizeObserver(drawSpark).observe(spark);
+// Resize-aware redraw
+new ResizeObserver(()=>{ drawHistogram(lastFreqs); drawIntervals(); }).observe(histCv);
+new ResizeObserver(()=>{ drawHistogram(lastFreqs); drawIntervals(); }).observe(intervalsCv);
